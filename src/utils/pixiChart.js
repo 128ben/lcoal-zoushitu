@@ -149,6 +149,10 @@ export class PixiChart {
     this.chartContainer.position.set(this.viewState.offsetX, this.viewState.offsetY);
     this.chartContainer.scale.set(this.viewState.scaleX, this.viewState.scaleY);
     
+    // 同步脉冲容器的变换，使其跟随图表容器
+    this.pulseContainer.position.set(this.viewState.offsetX, this.viewState.offsetY);
+    this.pulseContainer.scale.set(this.viewState.scaleX, this.viewState.scaleY);
+    
     this.drawGrid();
     this.drawChart();
   }
