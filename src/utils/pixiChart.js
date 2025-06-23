@@ -159,12 +159,20 @@ export class PixiChart {
   }
   
   updateView() {
-    this.chartContainer.position.set(this.viewState.offsetX, this.viewState.offsetY);
-    this.chartContainer.scale.set(this.viewState.scaleX, this.viewState.scaleY);
+    // 图表容器保持原始缩放，变换通过坐标转换函数处理
+    this.chartContainer.position.set(0, 0);
+    this.chartContainer.scale.set(1, 1);
     
-    // 同步脉冲容器的变换，使其跟随图表容器
-    this.pulseContainer.position.set(this.viewState.offsetX, this.viewState.offsetY);
-    this.pulseContainer.scale.set(this.viewState.scaleX, this.viewState.scaleY);
+    // 脉冲容器也保持原始缩放，跟随图表数据
+    this.pulseContainer.position.set(0, 0);
+    this.pulseContainer.scale.set(1, 1);
+    
+    // 网格和文本容器保持在屏幕坐标系中，不进行缩放变换
+    // 这样网格密度可以根据缩放级别动态调整
+    this.gridContainer.position.set(0, 0);
+    this.gridContainer.scale.set(1, 1);
+    this.textContainer.position.set(0, 0);
+    this.textContainer.scale.set(1, 1);
     
     this.drawGrid();
     this.drawChart();
@@ -177,7 +185,6 @@ export class PixiChart {
     const width = this.options.width;
     const height = this.options.height;
     const currentTime = Date.now();
-    const timeOffset = ((currentTime - this.startTime) % 5000) / 5000; // 5秒一个周期
     
     // 最新时间在四分之三处
     const latestTimeX = width * 0.75;
@@ -185,27 +192,43 @@ export class PixiChart {
     // 设置网格样式
     this.gridGraphics.lineStyle(1, this.options.gridColor, 0.3);
     
-    // 绘制流动的垂直网格线（时间轴）
-    const gridSpacing = 100; // 网格间距
-    const numLines = Math.ceil(width / gridSpacing) + 2;
+    // 根据缩放级别调整网格密度
+    const baseGridSpacing = 100; // 基础网格间距
+    const timeGridSpacing = Math.max(20, baseGridSpacing / this.viewState.scaleX); // 时间轴网格间距
     
-    for (let i = -1; i < numLines; i++) {
-      // 以四分之三处为基准计算网格线位置
-      const x = latestTimeX + (i * gridSpacing) - (timeOffset * gridSpacing) - (Math.floor(numLines * 0.75) * gridSpacing);
+    // 计算时间间隔（根据缩放调整）
+    const baseTimeInterval = 5000; // 基础时间间隔5秒
+    const timeInterval = Math.max(1000, baseTimeInterval / this.viewState.scaleX); // 动态时间间隔
+    
+    // 绘制垂直网格线（时间轴）- 使用与数据相同的坐标转换逻辑
+    const numTimeLines = Math.ceil(width / timeGridSpacing) + 4; // 增加网格线数量确保覆盖
+    
+    // 计算当前可见的时间范围
+    const visibleTimeStart = currentTime - this.timeRange / this.viewState.scaleX;
+    const visibleTimeEnd = currentTime;
+    
+    // 根据时间间隔生成网格线
+    const startGridTime = Math.floor(visibleTimeStart / timeInterval) * timeInterval;
+    const endGridTime = Math.ceil(visibleTimeEnd / timeInterval) * timeInterval;
+    
+    for (let timestamp = startGridTime; timestamp <= endGridTime + timeInterval; timestamp += timeInterval) {
+      // 使用与折线数据相同的坐标转换方法
+      const x = this.timeToX(timestamp, currentTime, width);
       
-      if (x >= -gridSpacing && x <= width + gridSpacing) {
+      if (x >= -timeGridSpacing && x <= width + timeGridSpacing) {
         // 绘制垂直线
         this.gridGraphics.moveTo(x, 0);
         this.gridGraphics.lineTo(x, height);
         
         // 添加时间标签
-        const timeOffsetFromLatest = (latestTimeX - x) / gridSpacing * 5000; // 每个网格5秒
-        const timeAtLine = currentTime - timeOffsetFromLatest;
-        const timeText = this.formatTimeLabel(timeAtLine);
+        const timeText = this.formatTimeLabel(timestamp);
+        
+        // 根据缩放调整字体大小
+        const fontSize = Math.max(8, Math.min(16, 12 / Math.sqrt(this.viewState.scaleX)));
         
         const text = new PIXI.Text(timeText, {
           fontFamily: 'Arial',
-          fontSize: 12,
+          fontSize: fontSize,
           fill: this.options.textColor,
           align: 'center'
         });
@@ -216,27 +239,43 @@ export class PixiChart {
       }
     }
     
-    // 绘制水平网格线（价格轴）
-    const priceStep = (this.priceRange.max - this.priceRange.min) / 8;
-    for (let i = 0; i <= 8; i++) {
-      const price = this.priceRange.min + (i * priceStep);
+    // 绘制水平网格线（价格轴）- 使用与数据相同的坐标转换逻辑
+    const currentPriceRange = this.priceRange.max - this.priceRange.min;
+    const basePriceStep = currentPriceRange / 8;
+    const adjustedPriceStep = Math.max(0.01, basePriceStep / this.viewState.scaleY); // 根据缩放调整价格步长
+    
+    // 计算可见的价格范围（考虑缩放和偏移）
+    const visiblePriceMin = this.priceRange.min - currentPriceRange * 0.2;
+    const visiblePriceMax = this.priceRange.max + currentPriceRange * 0.2;
+    
+    // 根据价格步长生成网格线
+    const startGridPrice = Math.floor(visiblePriceMin / adjustedPriceStep) * adjustedPriceStep;
+    const endGridPrice = Math.ceil(visiblePriceMax / adjustedPriceStep) * adjustedPriceStep;
+    
+    for (let price = startGridPrice; price <= endGridPrice; price += adjustedPriceStep) {
+      // 使用与折线数据相同的坐标转换方法
       const y = this.priceToY(price);
       
-      // 绘制水平线
-      this.gridGraphics.moveTo(0, y);
-      this.gridGraphics.lineTo(width, y);
-      
-      // 添加价格标签
-      const priceText = new PIXI.Text(price.toFixed(2), {
-        fontFamily: 'Arial',
-        fontSize: 12,
-        fill: this.options.textColor,
-        align: 'right'
-      });
-      
-      priceText.x = 5;
-      priceText.y = y - 8;
-      this.textContainer.addChild(priceText);
+      if (y >= -50 && y <= height + 50) {
+        // 绘制水平线
+        this.gridGraphics.moveTo(0, y);
+        this.gridGraphics.lineTo(width, y);
+        
+        // 添加价格标签，根据缩放调整精度和字体大小
+        const precision = this.viewState.scaleY > 2 ? 3 : 2;
+        const fontSize = Math.max(8, Math.min(16, 12 / Math.sqrt(this.viewState.scaleY)));
+        
+        const priceText = new PIXI.Text(price.toFixed(precision), {
+          fontFamily: 'Arial',
+          fontSize: fontSize,
+          fill: this.options.textColor,
+          align: 'right'
+        });
+        
+        priceText.x = 5;
+        priceText.y = y - 8;
+        this.textContainer.addChild(priceText);
+      }
     }
   }
   
@@ -253,13 +292,18 @@ export class PixiChart {
     const currentTime = Date.now();
     const chartWidth = this.options.width;
     
-    // 获取可见数据
+    // 根据缩放级别调整可见时间范围
+    const adjustedTimeRange = this.timeRange / this.viewState.scaleX;
+    
+    // 获取可见数据，考虑缩放和偏移
     const visibleData = this.data.filter(point => {
       const timeDiff = currentTime - point.timestamp;
-      return timeDiff <= this.timeRange && timeDiff >= 0;
+      // 考虑时间偏移，计算实际可见的时间窗口
+      const timeOffset = -this.viewState.offsetX / this.viewState.scaleX / chartWidth * this.timeRange;
+      return timeDiff >= timeOffset && timeDiff <= adjustedTimeRange + timeOffset;
     });
     
-    console.log('总数据:', this.data.length, '可见数据:', visibleData.length, '价格范围:', this.priceRange);
+    console.log('总数据:', this.data.length, '可见数据:', visibleData.length, '价格范围:', this.priceRange, '调整后时间范围:', adjustedTimeRange);
     
     if (visibleData.length === 0) return;
     
@@ -303,7 +347,9 @@ export class PixiChart {
       const x = this.timeToX(point.timestamp, currentTime, chartWidth);
       const y = this.priceToY(point.price);
       
-      if (x >= -200 && x <= chartWidth + 200) {
+      // 扩大可见范围，考虑缩放后的实际显示区域
+      const visibleMargin = 200 / Math.min(this.viewState.scaleX, this.viewState.scaleY);
+      if (x >= -visibleMargin && x <= chartWidth + visibleMargin && y >= -visibleMargin && y <= this.options.height + visibleMargin) {
         if (isFirstPoint) {
           this.lineGraphics.moveTo(x, y);
           isFirstPoint = false;
@@ -378,7 +424,10 @@ export class PixiChart {
   timeToX(timestamp, currentTime, chartWidth) {
     const latestX = chartWidth * 0.75;
     const timeDiff = currentTime - timestamp;
-    return latestX - (timeDiff / this.timeRange) * chartWidth;
+    const baseX = latestX - (timeDiff / this.timeRange) * chartWidth;
+    
+    // 应用视图变换：先缩放再偏移
+    return baseX * this.viewState.scaleX + this.viewState.offsetX;
   }
   
   drawPulseEffect() {
@@ -418,7 +467,10 @@ export class PixiChart {
     const normalizedPrice = (price - this.priceRange.min) / (this.priceRange.max - this.priceRange.min);
     const chartTop = this.options.height * 0.1;
     const chartHeight = this.options.height * 0.7; // 留出底部空间给时间标签
-    return chartTop + chartHeight - (normalizedPrice * chartHeight);
+    const baseY = chartTop + chartHeight - (normalizedPrice * chartHeight);
+    
+    // 应用视图变换：先缩放再偏移
+    return baseY * this.viewState.scaleY + this.viewState.offsetY;
   }
   
   updatePriceRange() {
