@@ -49,6 +49,10 @@ export class PixiChart {
     this.priceRange = { min: 95, max: 105 }; // 初始价格范围
     this.startTime = Date.now();
     
+    // 网格更新控制
+    this.lastGridUpdate = 0;
+    this.gridUpdateInterval = 100; // 网格更新间隔100ms
+    
     this.init();
   }
   
@@ -298,9 +302,8 @@ export class PixiChart {
   drawChart() {
     if (this.data.length === 0) return;
     
-    // 清除之前的绘制
+    // 清除之前的线条绘制（不清除脉冲效果）
     this.lineGraphics.clear();
-    this.pulseGraphics.clear();
     
     // 更新价格范围
     this.updatePriceRange();
@@ -314,56 +317,46 @@ export class PixiChart {
     // 获取可见数据，考虑缩放和偏移
     const visibleData = this.data.filter(point => {
       const timeDiff = currentTime - point.timestamp;
-      // 考虑时间偏移，计算实际可见的时间窗口
       const timeOffset = -this.viewState.offsetX / this.viewState.scaleX / chartWidth * this.timeRange;
       return timeDiff >= timeOffset && timeDiff <= adjustedTimeRange + timeOffset;
     });
     
-    console.log('总数据:', this.data.length, '可见数据:', visibleData.length, '价格范围:', this.priceRange, '调整后时间范围:', adjustedTimeRange);
-    
     if (visibleData.length === 0) return;
     
-    // 如果只有一个数据点，不绘制额外的圆圈
-    // 让脉冲效果统一处理端点显示
+    // 单点处理
     if (visibleData.length === 1) {
       const point = visibleData[0];
       const x = this.timeToX(point.timestamp, currentTime, chartWidth);
       const y = this.priceToY(point.price);
-      
-      // 只设置端点位置，不绘制额外的圆圈
       this.lastEndPoint = { x, y };
-      this.drawPulseEffect();
       return;
     }
     
-    // 统一绘制所有线段
-    this.drawUnifiedLine(visibleData, currentTime, chartWidth);
-    
-    // 绘制端点脉冲效果
-    this.drawPulseEffect();
+    // 绘制折线
+    this.drawSmoothLine(visibleData, currentTime, chartWidth);
   }
   
-  drawUnifiedLine(visibleData, currentTime, chartWidth) {
-    this.lineGraphics.lineStyle(2, this.options.lineColor, 1);
+  drawSmoothLine(visibleData, currentTime, chartWidth) {
+    // 设置线条样式 - 使用更现代的样式
+    this.lineGraphics.lineStyle(3, this.options.lineColor, 1);
     
     let isFirstPoint = true;
     let lastDrawnPoint = null;
     
-    // 如果有动画在进行，只绘制到倒数第二个点
+    // 确定绘制范围
     let drawToIndex = visibleData.length - 1;
     if (this.options.animationEnabled && this.animationState.isAnimating && visibleData.length > 1) {
       drawToIndex = visibleData.length - 2;
     }
     
-    // 绘制所有静态线段
+    // 绘制静态线段
     for (let i = 0; i <= drawToIndex; i++) {
       const point = visibleData[i];
       const x = this.timeToX(point.timestamp, currentTime, chartWidth);
       const y = this.priceToY(point.price);
       
-      // 扩大可见范围，考虑缩放后的实际显示区域
-      const visibleMargin = 200 / Math.min(this.viewState.scaleX, this.viewState.scaleY);
-      if (x >= -visibleMargin && x <= chartWidth + visibleMargin && y >= -visibleMargin && y <= this.options.height + visibleMargin) {
+      // 优化可见性检查
+      if (this.isPointVisible(x, y)) {
         if (isFirstPoint) {
           this.lineGraphics.moveTo(x, y);
           isFirstPoint = false;
@@ -374,93 +367,61 @@ export class PixiChart {
       }
     }
     
-    // 如果有动画在进行，绘制动画线段
+    // 处理动画线段
     if (this.options.animationEnabled && this.animationState.isAnimating && visibleData.length > 1) {
-      // 使用当前时间重新计算动画起点和终点，确保与静态线段一致
-      const fromDataPoint = visibleData[visibleData.length - 2];
-      const toDataPoint = visibleData[visibleData.length - 1];
-      
-      const fromX = this.timeToX(fromDataPoint.timestamp, currentTime, chartWidth);
-      const fromY = this.priceToY(fromDataPoint.price);
-      const toX = this.timeToX(toDataPoint.timestamp, currentTime, chartWidth);
-      const toY = this.priceToY(toDataPoint.price);
-      
-      // 计算当前动画位置
-      const progress = this.animationState.currentProgress;
-      const easedProgress = this.easeOutCubic(progress);
-      const currentX = fromX + (toX - fromX) * easedProgress;
-      const currentY = fromY + (toY - fromY) * easedProgress;
-      
-      // 确保从正确的起点开始绘制
-      if (lastDrawnPoint) {
-        // 验证起点是否匹配
-        const startMatches = Math.abs(lastDrawnPoint.x - fromX) < 1 && Math.abs(lastDrawnPoint.y - fromY) < 1;
-        
-        if (startMatches) {
-          // 从静态终点直接绘制到当前动画位置
-          this.lineGraphics.lineTo(currentX, currentY);
-        } else {
-          // 如果不匹配，移动到正确的起点再绘制
-          this.lineGraphics.moveTo(fromX, fromY);
-          this.lineGraphics.lineTo(currentX, currentY);
-        }
-      } else {
-        // 没有静态点，直接从动画起点开始
-        this.lineGraphics.moveTo(fromX, fromY);
-        this.lineGraphics.lineTo(currentX, currentY);
+      const animatedPoint = this.calculateAnimatedPoint(visibleData, currentTime, chartWidth);
+      if (animatedPoint && lastDrawnPoint) {
+        this.lineGraphics.lineTo(animatedPoint.x, animatedPoint.y);
+        this.lastEndPoint = animatedPoint;
       }
-      
-      // 移除笔尖效果，让脉冲效果统一处理端点显示
-      // 避免两个端点的视觉冲突
-      
-      // 更新端点位置
-      this.lastEndPoint = { x: currentX, y: currentY };
     } else {
-      // 没有动画时，更新端点到最后一个绘制的点
       this.lastEndPoint = lastDrawnPoint;
     }
   }
   
-  // 新增：统一的时间到X坐标转换方法
-  timeToX(timestamp, currentTime, chartWidth) {
-    const latestX = chartWidth * 0.75;
-    const timeDiff = currentTime - timestamp;
-    const baseX = latestX - (timeDiff / this.timeRange) * chartWidth;
+  calculateAnimatedPoint(visibleData, currentTime, chartWidth) {
+    const fromDataPoint = visibleData[visibleData.length - 2];
+    const toDataPoint = visibleData[visibleData.length - 1];
     
-    // 应用视图变换：先缩放再偏移
-    return baseX * this.viewState.scaleX + this.viewState.offsetX;
+    const fromX = this.timeToX(fromDataPoint.timestamp, currentTime, chartWidth);
+    const fromY = this.priceToY(fromDataPoint.price);
+    const toX = this.timeToX(toDataPoint.timestamp, currentTime, chartWidth);
+    const toY = this.priceToY(toDataPoint.price);
+    
+    const progress = this.easeOutCubic(this.animationState.currentProgress);
+    const currentX = fromX + (toX - fromX) * progress;
+    const currentY = fromY + (toY - fromY) * progress;
+    
+    return { x: currentX, y: currentY };
+  }
+  
+  isPointVisible(x, y) {
+    const margin = 50;
+    return x >= -margin && x <= this.options.width + margin && 
+           y >= -margin && y <= this.options.height + margin;
   }
   
   drawPulseEffect() {
-    // 统一使用折线的实际端点位置，确保脉冲效果与折线端点完全同步
     if (!this.lastEndPoint) return;
     
     const { x, y } = this.lastEndPoint;
     
-    // 计算脉冲动画参数
-    const pulseSpeed = 0.05; // 脉冲速度
+    // 更精细的脉冲动画
+    const pulseSpeed = 0.08;
     this.pulseTime += pulseSpeed;
     
-    // 创建多层脉冲效果
-    const pulseCount = 3;
-    for (let i = 0; i < pulseCount; i++) {
-      const phaseOffset = (i * Math.PI * 2) / pulseCount;
-      const pulse = Math.sin(this.pulseTime + phaseOffset) * 0.5 + 0.5;
-      
-      // 脉冲半径和透明度
-      const baseRadius = 4;
-      const maxRadius = 12;
-      const radius = baseRadius + (maxRadius - baseRadius) * pulse;
-      const alpha = (1 - pulse) * 0.6;
-      
-      // 绘制脉冲圆环 - 使用折线颜色
-      this.pulseGraphics.lineStyle(2, this.options.lineColor, alpha);
-      this.pulseGraphics.drawCircle(x, y, radius);
-    }
+    // 单一脉冲效果，更简洁
+    const pulse = (Math.sin(this.pulseTime) + 1) * 0.5;
+    const radius = 4 + pulse * 8;
+    const alpha = (1 - pulse) * 0.8;
     
-    // 绘制中心点 - 使用折线颜色
+    // 绘制脉冲圆环
+    this.pulseGraphics.lineStyle(2, this.options.lineColor, alpha);
+    this.pulseGraphics.drawCircle(x, y, radius);
+    
+    // 绘制中心点
     this.pulseGraphics.beginFill(this.options.lineColor, 1);
-    this.pulseGraphics.drawCircle(x, y, 3);
+    this.pulseGraphics.drawCircle(x, y, 2);
     this.pulseGraphics.endFill();
   }
   
@@ -512,7 +473,7 @@ export class PixiChart {
       const currentTime = Date.now();
       const chartWidth = this.options.width;
       
-      // 计算前一个点和新点的屏幕坐标 - 使用统一的坐标计算方法
+      // 计算前一个点和新点的屏幕坐标
       const prevData = this.data[previousDataLength - 1];
       const prevX = this.timeToX(prevData.timestamp, currentTime, chartWidth);
       const prevY = this.priceToY(prevData.price);
@@ -520,29 +481,22 @@ export class PixiChart {
       const newX = this.timeToX(newData.timestamp, currentTime, chartWidth);
       const newY = this.priceToY(newData.price);
       
-      console.log('动画坐标计算:', {
-        prevData: prevData.price,
-        newData: newData.price,
-        prevCoord: { x: prevX, y: prevY },
-        newCoord: { x: newX, y: newY },
-        priceRange: this.priceRange,
-        timestamps: {
-          prev: prevData.timestamp,
-          new: newData.timestamp,
-          current: currentTime
-        }
-      });
-      
       // 检查坐标是否有效
       if (!isNaN(prevX) && !isNaN(prevY) && !isNaN(newX) && !isNaN(newY)) {
         // 只有当两个点都在合理范围内时才启动动画
-        if (prevX >= -100 && prevX <= chartWidth + 100 && newX >= -100 && newX <= chartWidth + 100) {
+        if (this.isPointVisible(prevX, prevY) || this.isPointVisible(newX, newY)) {
           this.startLineAnimation(
             { x: prevX, y: prevY },
             { x: newX, y: newY }
           );
+        } else {
+          // 点不在可见范围内，直接重绘
+          this.drawChart();
         }
       }
+    } else {
+      // 没有动画或第一个数据点，立即重绘
+      this.drawChart();
     }
     
     // 保持数据在合理范围内
@@ -572,12 +526,43 @@ export class PixiChart {
   
   update() {
     // 更新动画状态
+    const wasAnimating = this.animationState.isAnimating;
     this.updateAnimation();
     
-    // 持续更新网格和图表以实现流动效果
-    this.drawGrid();
-    this.drawChart();
-    this.drawLatestPriceLine(); // 持续更新最新价格线
+    // 网格更新控制 - 降低更新频率以提高性能
+    const currentTime = Date.now();
+    if (currentTime - this.lastGridUpdate > this.gridUpdateInterval) {
+      this.drawGrid();
+      this.lastGridUpdate = currentTime;
+    }
+    
+    // 优化重绘策略：只在必要时重绘图表
+    let needsRedraw = false;
+    
+    // 检查是否需要重绘图表
+    if (this.animationState.isAnimating) {
+      // 动画进行中，需要重绘
+      needsRedraw = true;
+    } else if (wasAnimating && !this.animationState.isAnimating) {
+      // 动画刚结束，需要重绘最终状态
+      needsRedraw = true;
+    }
+    
+    // 只在需要时重绘图表
+    if (needsRedraw) {
+      this.drawChart();
+    }
+    
+    // 脉冲效果独立更新（轻量级操作）
+    if (this.lastEndPoint) {
+      this.pulseGraphics.clear();
+      this.drawPulseEffect();
+    }
+    
+    // 最新价格线独立更新
+    if (this.data.length > 0) {
+      this.drawLatestPriceLine();
+    }
   }
   
   resetView() {
@@ -764,5 +749,15 @@ export class PixiChart {
   // 获取最新价格线状态
   isLatestPriceLineVisible() {
     return this.options.showLatestPriceLine;
+  }
+  
+  // 统一的时间到X坐标转换方法
+  timeToX(timestamp, currentTime, chartWidth) {
+    const latestX = chartWidth * 0.75;
+    const timeDiff = currentTime - timestamp;
+    const baseX = latestX - (timeDiff / this.timeRange) * chartWidth;
+    
+    // 应用视图变换：先缩放再偏移
+    return baseX * this.viewState.scaleX + this.viewState.offsetX;
   }
 } 
