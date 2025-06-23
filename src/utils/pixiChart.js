@@ -12,9 +12,11 @@ export class PixiChart {
       pointColor: options.pointColor || 0xffffff,
       latestPointColor: options.latestPointColor || 0xff4444,
       textColor: options.textColor || 0xcccccc,
+      latestPriceLineColor: options.latestPriceLineColor || 0xff4444, // 最新价格线颜色
       animationDuration: options.animationDuration || 800, // 动画持续时间(ms)
       animationEasing: options.animationEasing || 'easeOutCubic', // 缓动函数
       animationEnabled: options.animationEnabled || true,
+      showLatestPriceLine: options.showLatestPriceLine !== false, // 默认显示最新价格线
       ...options
     };
     
@@ -37,6 +39,11 @@ export class PixiChart {
       currentProgress: 0,
       pendingAnimations: [] // 待执行的动画队列
     };
+    
+    // 最新价格线相关
+    this.latestPrice = null;
+    this.latestPriceLineGraphics = null;
+    this.latestPriceLabel = null;
     
     this.timeRange = 60000; // 60秒时间范围
     this.priceRange = { min: 95, max: 105 }; // 初始价格范围
@@ -69,22 +76,26 @@ export class PixiChart {
     // 创建容器
     this.gridContainer = new PIXI.Container();
     this.chartContainer = new PIXI.Container();
+    this.latestPriceLineContainer = new PIXI.Container(); // 最新价格线容器
     this.textContainer = new PIXI.Container();
     this.pulseContainer = new PIXI.Container();
     
     // 添加到stage，顺序很重要
     this.app.stage.addChild(this.gridContainer);
     this.app.stage.addChild(this.chartContainer);
+    this.app.stage.addChild(this.latestPriceLineContainer); // 最新价格线在图表之上
     this.app.stage.addChild(this.pulseContainer);
     this.app.stage.addChild(this.textContainer);
     
     // 创建图形对象 - 简化为单一线段对象
     this.gridGraphics = new PIXI.Graphics();
     this.lineGraphics = new PIXI.Graphics(); // 统一的线段绘制对象
+    this.latestPriceLineGraphics = new PIXI.Graphics(); // 最新价格线绘制对象
     this.pulseGraphics = new PIXI.Graphics();
     
     this.gridContainer.addChild(this.gridGraphics);
     this.chartContainer.addChild(this.lineGraphics);
+    this.latestPriceLineContainer.addChild(this.latestPriceLineGraphics);
     this.pulseContainer.addChild(this.pulseGraphics);
     
     // 脉冲动画相关
@@ -163,6 +174,10 @@ export class PixiChart {
     this.chartContainer.position.set(0, 0);
     this.chartContainer.scale.set(1, 1);
     
+    // 最新价格线容器也保持原始缩放，跟随图表数据
+    this.latestPriceLineContainer.position.set(0, 0);
+    this.latestPriceLineContainer.scale.set(1, 1);
+    
     // 脉冲容器也保持原始缩放，跟随图表数据
     this.pulseContainer.position.set(0, 0);
     this.pulseContainer.scale.set(1, 1);
@@ -176,6 +191,7 @@ export class PixiChart {
     
     this.drawGrid();
     this.drawChart();
+    this.drawLatestPriceLine(); // 绘制最新价格线
   }
   
   drawGrid() {
@@ -307,16 +323,14 @@ export class PixiChart {
     
     if (visibleData.length === 0) return;
     
-    // 如果只有一个数据点，绘制一个点
+    // 如果只有一个数据点，不绘制额外的圆圈
+    // 让脉冲效果统一处理端点显示
     if (visibleData.length === 1) {
       const point = visibleData[0];
       const x = this.timeToX(point.timestamp, currentTime, chartWidth);
       const y = this.priceToY(point.price);
       
-      this.lineGraphics.beginFill(this.options.lineColor, 1);
-      this.lineGraphics.drawCircle(x, y, 3);
-      this.lineGraphics.endFill();
-      
+      // 只设置端点位置，不绘制额外的圆圈
       this.lastEndPoint = { x, y };
       this.drawPulseEffect();
       return;
@@ -396,24 +410,11 @@ export class PixiChart {
         this.lineGraphics.lineTo(currentX, currentY);
       }
       
-      // 绘制笔尖效果
-      this.lineGraphics.beginFill(this.options.lineColor, 0.8);
-      this.lineGraphics.drawCircle(currentX, currentY, 2);
-      this.lineGraphics.endFill();
+      // 移除笔尖效果，让脉冲效果统一处理端点显示
+      // 避免两个端点的视觉冲突
       
       // 更新端点位置
       this.lastEndPoint = { x: currentX, y: currentY };
-      
-      console.log('重新计算动画坐标:', {
-        fromData: { timestamp: fromDataPoint.timestamp, price: fromDataPoint.price },
-        toData: { timestamp: toDataPoint.timestamp, price: toDataPoint.price },
-        fromCoord: { x: fromX, y: fromY },
-        toCoord: { x: toX, y: toY },
-        currentCoord: { x: currentX, y: currentY },
-        lastDrawnPoint,
-        progress,
-        currentTime
-      });
     } else {
       // 没有动画时，更新端点到最后一个绘制的点
       this.lastEndPoint = lastDrawnPoint;
@@ -431,7 +432,7 @@ export class PixiChart {
   }
   
   drawPulseEffect() {
-    // 使用主折线的端点位置
+    // 统一使用折线的实际端点位置，确保脉冲效果与折线端点完全同步
     if (!this.lastEndPoint) return;
     
     const { x, y } = this.lastEndPoint;
@@ -549,6 +550,26 @@ export class PixiChart {
     this.data = this.data.filter(d => d.timestamp > cutoffTime);
   }
   
+  // 更新最新价格线位置
+  updateLatestPriceLine(price) {
+    const y = this.priceToY(price);
+    this.latestPrice = { 
+      price: price, 
+      y: y 
+    };
+    
+    // 创建或更新价格标签
+    if (!this.latestPriceLabel) {
+      this.latestPriceLabel = new PIXI.Text('', {
+        fontFamily: 'Arial',
+        fontSize: 12,
+        fill: 0xffffff,
+        fontWeight: 'bold'
+      });
+      this.textContainer.addChild(this.latestPriceLabel);
+    }
+  }
+  
   update() {
     // 更新动画状态
     this.updateAnimation();
@@ -556,6 +577,7 @@ export class PixiChart {
     // 持续更新网格和图表以实现流动效果
     this.drawGrid();
     this.drawChart();
+    this.drawLatestPriceLine(); // 持续更新最新价格线
   }
   
   resetView() {
@@ -667,5 +689,80 @@ export class PixiChart {
         this.startLineAnimation(nextAnimation.fromPoint, nextAnimation.toPoint);
       }
     }
+  }
+  
+  drawLatestPriceLine() {
+    if (!this.options.showLatestPriceLine || !this.data.length || !this.lastEndPoint) return;
+    
+    // 直接使用折线端点的Y坐标，确保完全同步
+    const animatedY = this.lastEndPoint.y;
+    const latestData = this.data[this.data.length - 1];
+    
+    // 更新最新价格信息，使用折线端点的实际位置
+    this.latestPrice = { 
+      price: latestData.price, 
+      y: animatedY,
+      x: this.lastEndPoint.x
+    };
+    
+    const width = this.options.width;
+    
+    this.latestPriceLineGraphics.clear();
+    
+    // 使用与折线相同的颜色绘制价格线
+    this.latestPriceLineGraphics.lineStyle(2, this.options.lineColor, 0.8);
+    
+    // 绘制虚线效果
+    const dashLength = 8;
+    const gapLength = 4;
+    let currentX = 0;
+    
+    while (currentX < width) {
+      const endX = Math.min(currentX + dashLength, width);
+      this.latestPriceLineGraphics.moveTo(currentX, animatedY);
+      this.latestPriceLineGraphics.lineTo(endX, animatedY);
+      currentX = endX + gapLength;
+    }
+    
+    // 绘制右侧价格标签背景
+    if (this.latestPriceLabel) {
+      // 先更新标签文本以获取正确的宽度
+      this.latestPriceLabel.text = `$${latestData.price.toFixed(2)}`;
+      
+      const labelWidth = this.latestPriceLabel.width + 16;
+      const labelHeight = 20;
+      const labelX = width - labelWidth;
+      
+      // 使用与折线相同的颜色作为标签背景
+      this.latestPriceLineGraphics.beginFill(this.options.lineColor, 0.9);
+      this.latestPriceLineGraphics.drawRoundedRect(labelX, animatedY - labelHeight/2, labelWidth, labelHeight, 3);
+      this.latestPriceLineGraphics.endFill();
+      
+      // 更新标签位置
+      this.latestPriceLabel.x = labelX + 8;
+      this.latestPriceLabel.y = animatedY - 8;
+    }
+  }
+  
+  // 控制最新价格线显示/隐藏
+  setLatestPriceLineVisible(visible) {
+    this.options.showLatestPriceLine = visible;
+    
+    if (!visible) {
+      this.latestPriceLineGraphics.clear();
+      if (this.latestPriceLabel && this.latestPriceLabel.parent) {
+        this.latestPriceLabel.visible = false;
+      }
+    } else {
+      if (this.latestPriceLabel) {
+        this.latestPriceLabel.visible = true;
+      }
+      this.drawLatestPriceLine();
+    }
+  }
+  
+  // 获取最新价格线状态
+  isLatestPriceLineVisible() {
+    return this.options.showLatestPriceLine;
   }
 } 
