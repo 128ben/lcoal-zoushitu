@@ -19,6 +19,12 @@
           <span class="label">变化:</span>
           <span class="value" :class="priceChangeClass">{{ priceChange }}%</span>
         </span>
+        <span class="stat-item">
+          <span class="label">动画:</span>
+          <span class="value" :class="{ 'animation-enabled': animationEnabled }">
+            {{ animationEnabled ? '开启' : '关闭' }}
+          </span>
+        </span>
       </div>
       <div class="control-buttons">
         <button @click="zoomIn" class="control-btn">
@@ -37,6 +43,23 @@
           <span>{{ isPaused ? '▶️' : '⏸️' }}</span>
           <span>{{ isPaused ? '继续' : '暂停' }}</span>
         </button>
+        <button @click="toggleAnimation" class="control-btn" :class="{ active: animationEnabled }">
+          <span>✨</span>
+          <span>动画</span>
+        </button>
+        <div class="animation-speed-control" v-if="animationEnabled">
+          <label class="speed-label">速度:</label>
+          <input 
+            type="range" 
+            min="200" 
+            max="2000" 
+            step="100" 
+            v-model="animationSpeed"
+            @input="updateAnimationSpeed"
+            class="speed-slider"
+          />
+          <span class="speed-value">{{ (2200 - animationSpeed) / 1000 }}x</span>
+        </div>
         <button @click="clearData" class="control-btn danger">
           <span>🗑️</span>
           <span>清空</span>
@@ -83,6 +106,8 @@ const isPaused = ref(false);
 const hoveredData = ref(null);
 const tooltipStyle = ref({});
 const connectionStatus = ref('connecting');
+const animationEnabled = ref(true);
+const animationSpeed = ref(1200);
 
 // 计算属性
 const priceChangeClass = computed(() => {
@@ -130,7 +155,9 @@ function initializeChart() {
     gridColor: 0x333333,
     lineColor: 0x00aaff,
     pointColor: 0xffffff,
-    latestPointColor: 0xff4444
+    latestPointColor: 0xff4444,
+    animationDuration: animationSpeed.value,
+    animationEnabled: animationEnabled.value
   });
 }
 
@@ -228,6 +255,20 @@ function togglePause() {
   isPaused.value = !isPaused.value;
 }
 
+function toggleAnimation() {
+  animationEnabled.value = !animationEnabled.value;
+  
+  if (pixiChart) {
+    pixiChart.setAnimationEnabled(animationEnabled.value);
+  }
+}
+
+function updateAnimationSpeed() {
+  if (pixiChart) {
+    pixiChart.setAnimationDuration(animationSpeed.value);
+  }
+}
+
 function clearData() {
   if (dataManager) {
     dataManager.clear();
@@ -319,10 +360,15 @@ function cleanup() {
   color: #ff4444;
 }
 
+.animation-enabled {
+  color: #00ff88;
+}
+
 .control-buttons {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+  align-items: center;
 }
 
 .control-btn {
@@ -455,5 +501,67 @@ function cleanup() {
     min-width: 45px;
     padding: 6px 8px;
   }
+}
+
+.animation-speed-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 6px;
+  border: 1px solid #333;
+}
+
+.speed-label {
+  color: #888;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.speed-slider {
+  width: 80px;
+  height: 4px;
+  background: #333;
+  border-radius: 2px;
+  outline: none;
+  appearance: none;
+  cursor: pointer;
+}
+
+.speed-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  background: #007bff;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.speed-slider::-webkit-slider-thumb:hover {
+  background: #0056b3;
+}
+
+.speed-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  background: #007bff;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.speed-slider::-moz-range-thumb:hover {
+  background: #0056b3;
+}
+
+.speed-value {
+  color: #fff;
+  font-size: 11px;
+  font-weight: bold;
+  min-width: 25px;
+  text-align: center;
 }
 </style> 
